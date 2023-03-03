@@ -1,0 +1,112 @@
+* gb_recompiler
+
+... is a tool for recompiling (non self modifying) game boy machine code to
+native machine code statically. this shall provide an interface similar to a
+sm83 emulator.
+
+** Use-case
+
+very fast cpu-only emulation of the gb can be used for unit testing and
+superoptimization, among other things.
+
+** Possible methods to achieve this
+
+... and the pros/cons of this approach:
+
+*** using libgccjit
+
+pros:
+- portable
+- powerful optimizations
+
+cons:
+- ain't as fun as asm 😁
+- not sure about cross function optimizations
+
+*** x86 asm directly
+
+pros:
+- feel smart
+- can keep regs outside memory
+
+cons:
+- none 😁
+
+and thus for now, I will use x86 asm.
+
+** How...
+
+The standard C ABI on non windows machines passes the first 6 integers via
+the RDI, RSI, RDX, RCX, R8, R9 registers in this order. If we map them to
+the gb regs, we will eliminate the need to save the registers in ram after
+every routine.
+
+the mapping I propose: (letters are sm83 regs, not hex values)
+EDI : 00 _a 00 _f
+ESI : 00 _b 00 _c
+EDX : 00 _d 00 _e
+ECX : 00 _h 00 _l
+R8D : 00 00 _sp
+R9  : pointer to memory array
+
+Because of the construction, PC is known at compile time (or can be passed
+over the stack, later, for compatibility with self modifying code).
+
+The flags register is not really updated besides when it needs to be- that
+is between returns. Otherwise one can use the native flags reg, some bitmask
+test etc. hf, nf are hardly ever used and are hard to compute compared to
+cf, zf.
+
+Every routine/function is translated into the same function signature on
+C ABI level:
+
+typedef void (*sm83_func)(uint32_t af,
+                          uint32_t bc,
+                          uint32_t de,
+                          uint32_t hl,
+                          uint32_t sp,
+                          uint8_t* mem);
+
+The gb can do mostly just addition, subtraction and bit manipulation in the
+ALU. Bit manipulation is easy to perform while keeping integrity, while add
+and sub can be done with lea, with little to no cleanup. consider this C
+pseudocode to implement `add a, c`:
+`
+af += bc << 16
+`
+
+this is a single `lea` instruction! carry is easy to extract with a mask
+and the zeros need rarely be cleaned up- before returns, on the 
+instruction before a conditional jump or once every 127 instructions.
+
+16bit addition is also simple; consider `add hl, bc`:
+`
+hl &= 0xff00ff;
+hl += bc + 0xff00;
+hl &= 0xff00ff;
+`
+
+extracting the 16 bit value of a reg pair, for example for mem access, is
+not hard either; consider `ld a, (bc)`:
+`
+af = bc * 0x0001'0100;
+af >>= 16;
+af = mem[af_lower] << 16;
+`
+
+rotating bytes is a bit more challenging. `rlc b`:
+`
+extract_carry_into_lowest_bit_of_f(); // context dependent smart algorithm
+RAX = bc & 0x00ff'0000;
+RAX = RAX + af<<16;
+bc += RAX;
+`
+
+** Optimizations
+
+An optimization pass can happen to make the code a tiny bit faster. The
+following optimizations are proposed:
+
+- code motion to use the prefetch window better
+- move the used constants into the scratch regs at the beginning of the
+function
