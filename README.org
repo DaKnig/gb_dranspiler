@@ -36,10 +36,9 @@ and thus for now, I will use x86 asm.
 
 ** How...
 
-The standard C ABI on non windows machines passes the first 6 integers via
-the RDI, RSI, RDX, RCX, R8, R9 registers in this order. If we map them to
-the gb regs, we will eliminate the need to save the registers in ram after
-every routine.
+The standard System V C ABI passes the first 6 integers via the RDI, RSI,
+RDX, RCX, R8, R9 registers in this order. If we map them to the gb regs, we
+will eliminate the need to save the registers in ram after every routine.
 
 the mapping I propose: (letters are sm83 regs, not hex values)
 EDI : 00 _a 00 _f
@@ -67,46 +66,32 @@ typedef void (*sm83_func)(uint32_t af,
                           uint32_t sp,
                           uint8_t* mem);
 
-The gb can do mostly just addition, subtraction and bit manipulation in the
-ALU. Bit manipulation is easy to perform while keeping integrity, while add
-and sub can be done with lea, with little to no cleanup. consider this C
-pseudocode to implement `add a, c`:
-`
-af += bc << 16
-`
+any source function is gonna start with a prolog unpacking the regs into host
+regs with the following mapping:
 
-this is a single `lea` instruction! carry is easy to extract with a mask
-and the zeros need rarely be cleaned up- before returns, on the 
-instruction before a conditional jump or once every 127 instructions.
+sm83 | x86
+a    | al
+f    | flags, ah
+b    | bl
+c    | r9b
+d    | r8b
+e    | dl
+hl   | cx
+sp   | di
 
-16bit addition is also simple; consider `add hl, bc`:
-`
-hl &= 0xff00ff;
-hl += bc + 0xff00;
-hl &= 0xff00ff;
-`
+mem  | si
 
-extracting the 16 bit value of a reg pair, for example for mem access, is
-not hard either; consider `ld a, (bc)`:
-`
-af = bc * 0x0001'0100;
-af >>= 16;
-af = mem[af_lower] << 16;
-`
+hl is stored together in one register since it is commonly used as one reg
+pair.
 
-rotating bytes is a bit more challenging. `rlc b`:
-`
-extract_carry_into_lowest_bit_of_f(); // context dependent smart algorithm
-RAX = bc & 0x00ff'0000;
-RAX = RAX + af<<16;
-bc += RAX;
-`
+flags: the n, h are stored in ah at the beginning of the function and later
+moved or used as required.
 
 ** Optimizations
 
 An optimization pass can happen to make the code a tiny bit faster. The
 following optimizations are proposed:
 
-- code motion to use the prefetch window better
-- move the used constants into the scratch regs at the beginning of the
-function
+- code motion to pipeline code better
+
+
