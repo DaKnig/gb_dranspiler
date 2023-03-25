@@ -1,26 +1,26 @@
 #![allow(dead_code)]
 
-use crate::sm83::*;
-
+use crate::{Reg, RegPair, Instruction, AluBlockOp, RegOrNum};
 
 pub fn decode_instr(inst: [u8; 3]) -> Instruction {
     use Instruction::*;
-    type Con = Condition;
+    use RegPair::*;
     let d8: u8 = inst[1]; //
     let d16: u16 = inst[1] as u16 + (inst[2] as u16) << 8; // little endian
     let r8 = inst[1] as i8;
 
-    static REGS: [&Reg; 8] = [&B, &C, &D, &E, &H, &L, &HL_, &A];
-    // for instructions that look like columns on the octal instruction table
-    let r1 = REGS[(inst[0] as usize >> 3) & 7];
-    // for instructions that look like rows on the octal instruction table
-    let r2 = REGS[inst[0] as usize & 7];
-    let rr = [&BC, &DE, &HL, &SP][(inst[0] as usize >> 4) & 3];
+    // static REGS: [&Reg; 8] = [&B, &C, &D, &E, &H, &L, &HL_, &A];
+
+    // we can safely unwrap since for arguments 0..7 it's always Some
+    let r1 = Reg::by_num((inst[0] >> 3) & 7).unwrap();
+    let r2 = Reg::by_num(inst[0] & 7).unwrap();
+    // we can safely unwrap since for arguments 0..3 it's always Some
+    let rr = RegPair::by_num_group_hl_sp((inst[0] >> 4) & 3).unwrap();
     let c = match (inst[0] >> 3) & 3 {
-        0 => Con::NZ,
-        1 => Con::Z,
-        2 => Con::NC,
-        3 => Con::C,
+        0 => crate::Condition::NZ,
+        1 => crate::Condition::Z,
+        2 => crate::Condition::NC,
+        3 => crate::Condition::C,
         _ => unreachable!(),
     };
 
@@ -56,21 +56,21 @@ pub fn decode_instr(inst: [u8; 3]) -> Instruction {
         0o077 => CCF,
         0o166 => HALT,
         0o100..=0o177 => LD_r_r(r1, r2),
-        0o200..=0o207 => ADD_A_r(r2),
-        0o210..=0o217 => ADC_A_r(r2),
-        0o220..=0o227 => SUB_A_r(r2),
-        0o230..=0o237 => SBC_A_r(r2),
-        0o240..=0o247 => AND_A_r(r2),
-        0o250..=0o257 => XOR_A_r(r2),
-        0o260..=0o267 => OR_A_r(r2),
-        0o270..=0o277 => CP_A_r(r2),
+        0o200..=0o207 => Alu_A_RegOrNum(AluBlockOp::ADD, RegOrNum::Reg(r2)),
+        0o210..=0o217 => Alu_A_RegOrNum(AluBlockOp::ADC, RegOrNum::Reg(r2)),
+        0o220..=0o227 => Alu_A_RegOrNum(AluBlockOp::SUB, RegOrNum::Reg(r2)),
+        0o230..=0o237 => Alu_A_RegOrNum(AluBlockOp::SBC, RegOrNum::Reg(r2)),
+        0o240..=0o247 => Alu_A_RegOrNum(AluBlockOp::AND, RegOrNum::Reg(r2)),
+        0o250..=0o257 => Alu_A_RegOrNum(AluBlockOp::XOR, RegOrNum::Reg(r2)),
+        0o260..=0o267 => Alu_A_RegOrNum(AluBlockOp::OR, RegOrNum::Reg(r2)),
+        0o270..=0o277 => Alu_A_RegOrNum(AluBlockOp::CP, RegOrNum::Reg(r2)),
         0o300 | 0o310 | 0o320 | 0o330 => RET_c(c),
         0o340 => LDH_pa8_A(d8),
         0o350 => ADD_SP_r8(r8),
         0o360 => LDH_A_pa8(d8),
         0o370 => LD_HL_SP_r8(r8),
         0o301 | 0o321 | 0o341 => POP_rr(rr),
-        0o361 => POP_rr(&AF),
+        0o361 => POP_rr(AF),
         0o311 => RET,
         0o331 => RETI,
         0o351 => JP_HL,
@@ -88,26 +88,25 @@ pub fn decode_instr(inst: [u8; 3]) -> Instruction {
         0o373 => EI,
         0o304 | 0o314 | 0o324 | 0o334 => CALL_c_a16(c, d16),
         0o305 | 0o325 | 0o345 => POP_rr(rr),
-        0o365 => PUSH_rr(&AF),
+        0o365 => PUSH_rr(AF),
         0o315 => CALL_a16(d16),
-        0o306 => ADD_A_d8(d8),
-        0o316 => ADC_A_d8(d8),
-        0o326 => SUB_A_d8(d8),
-        0o336 => SBC_A_d8(d8),
-        0o346 => AND_A_d8(d8),
-        0o356 => XOR_A_d8(d8),
-        0o366 => OR_A_d8(d8),
-        0o376 => CP_A_d8(d8),
+        0o306 => Alu_A_RegOrNum(AluBlockOp::ADD, RegOrNum::Num(d8)),
+        0o316 => Alu_A_RegOrNum(AluBlockOp::ADC, RegOrNum::Num(d8)),
+        0o326 => Alu_A_RegOrNum(AluBlockOp::SUB, RegOrNum::Num(d8)),
+        0o336 => Alu_A_RegOrNum(AluBlockOp::SBC, RegOrNum::Num(d8)),
+        0o346 => Alu_A_RegOrNum(AluBlockOp::AND, RegOrNum::Num(d8)),
+        0o356 => Alu_A_RegOrNum(AluBlockOp::XOR, RegOrNum::Num(d8)),
+        0o366 => Alu_A_RegOrNum(AluBlockOp::OR, RegOrNum::Num(d8)),
+        0o376 => Alu_A_RegOrNum(AluBlockOp::CP, RegOrNum::Num(d8)),
         0o307 | 0o317 | 0o327 | 0o337 | 0o347 | 0o357 | 0o367
         | 0o377 => RST_vector(inst[0] & 0o070),
     }
 }
 
 fn prefix(inst: u8) -> Instruction {
-    use PrefixOp::*;
+    use crate::PrefixOp::*;
 
-    static REGS: [&Reg; 8] = [&B, &C, &D, &E, &H, &L, &HL_, &A];
-    let r = REGS[inst as usize & 7];
+    let r = Reg::by_num(inst & 7).unwrap();
     let bit = (inst >> 3) & 7;
 
     let op = match inst {
