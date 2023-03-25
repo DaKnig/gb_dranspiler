@@ -1,7 +1,8 @@
 mod sm83;
-use sm83::regs;
+use sm83::*;
+mod transpile;
 
 fn main() {
-    let _ = regs::BC;
+    let _ = RegPair::BC;
     println!("Hello, world!");
 }
