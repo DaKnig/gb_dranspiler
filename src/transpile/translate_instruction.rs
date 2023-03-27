@@ -73,14 +73,17 @@ pub fn transpile_instr_preserve_c_flag(
     }
 
     let res: TranspileInstrRes = match instr {
-        JP_c_a16(c, r8) => TranspileInstrRes::Branch {
+        JP_c_a16(c, a16) => TranspileInstrRes::Branch {
             cond: c,
-            dest: pc.wrapping_add_signed(r8 as i16),
-            to_patch: todo!(),
+            dest: a16,
+            to_patch: 0,
         },
-        Invalid | HALT | STOP(_) => TranspileInstrRes::Lockup {
-	    pc
-	},
+        CALL_c_a16(c, a16) => TranspileInstrRes::Branch {
+            cond: c,
+            dest: a16,
+            to_patch: 4,
+        },
+        Invalid | HALT | STOP(_) => TranspileInstrRes::Lockup { pc },
         _ => TranspileInstrRes::Ok,
     };
 
@@ -121,36 +124,53 @@ pub fn transpile_instr_preserve_c_flag(
             // asm.mov(g8(A), ptr(rr))?,
         }
         LD_pHLi_A => {
-            let mut ret = single(format!(
-                "mov BYTE PTR [{:#?}], {:#?}",
-                g64(HL),
-                g8(A)
-            ));
+            [
+                format!("mov BYTE PTR [{:#?}], {:#?}", g64(HL), g8(A)),
+                format!("inc {:#?}", g16(HL)),
+            ]
+            .map(Amd64Instr::new)
+            .into()
 
             // asm.mov(ptr(HL), g8(A))?;
             // how do I increase HL without changing the flags?
-            if g16(HL) == get_gpr16(Amd64::SI).unwrap()
-                && g8(A) == get_gpr8(Amd64::AL).unwrap()
-            {
-                ret.extend(vec![
-                    Amd64Instr::new("cld".into()),
-                    Amd64Instr::new("lodsb".into()),
-                ]);
-                // asm.cld()?;
-                // asm.lodsb()?;
-            } else {
-                todo!()
-            }
-            ret
+            // if g16(HL) == get_gpr16(Amd64::SI).unwrap()
+            //     && g8(A) == get_gpr8(Amd64::AL).unwrap()
+            // {
+            //     ret.extend(vec![
+            //         Amd64Instr::new("cld".into()),
+            //         Amd64Instr::new("lodsb".into()),
+            //     ]);
+            //     // asm.cld()?;
+            //     // asm.lodsb()?;
+            // }
         }
         LD_A_pHLi => {
-            todo!()
+            [
+                format!("mov {:#?}, BYTE PTR [{:#?}]", g8(A), g64(HL)),
+                format!("inc {:#?}", g16(HL)),
+            ]
+            .map(Amd64Instr::new)
+            .into()
+            //beep
         }
         LD_pHLd_A => {
-            todo!()
+            let ret = [
+                format!("mov BYTE PTR [{:#?}], {:#?}", g64(HL), g8(A)),
+                format!("dec {:#?}", g16(HL)),
+            ]
+            .map(Amd64Instr::new)
+            .into();
+
+            ret
         }
         LD_A_pHLd => {
-            todo!()
+            [
+                format!("mov {:#?}, BYTE PTR [{:#?}]", g8(A), g64(HL)),
+                format!("dec {:#?}", g16(HL)),
+            ]
+            .map(Amd64Instr::new)
+            .into()
+            //beep
         }
 
         INC_rr(rr) => single(format!("inc {:#?}", g16(rr))),
@@ -160,17 +180,19 @@ pub fn transpile_instr_preserve_c_flag(
         DEC_r(r) => single(format!("dec {:#?}", g8(r))),
         LD_r_d8(r, d8) => single(format!("mov {:#?} {d8}", g8(r))),
 
-        RLCA => {
-            todo!()
-        }
-        RRCA => {
-            todo!()
-        }
-        RLA => {
-            todo!()
-        }
-        RRA => {
-            todo!()
+        RLCA | RRCA | RLA | RRA => {
+            let op: sm83::Instruction = match instr {
+                RLCA => Prefix(sm83::PrefixOp::RLC, A),
+                RRCA => Prefix(sm83::PrefixOp::RRC, A),
+                RLA => Prefix(sm83::PrefixOp::RL, A),
+                RRA => Prefix(sm83::PrefixOp::RR, A),
+                _ => unreachable!(),
+            };
+            return transpile_instr_preserve_c_flag(
+                op,
+                mem_reg,
+                pc - 1,
+            );
         }
         DAA => {
             single("call daa".into())
@@ -202,18 +224,9 @@ pub fn transpile_instr_preserve_c_flag(
               or dil, sil
             */
         }
-        CPL => {
-            todo!()
-        }
-        SCF => {
-            todo!()
-        }
-        CCF => {
-            todo!()
-        }
-        HALT => {
-            todo!()
-        }
+        CPL => single(format!("not {:#?}", g8(A))),
+        SCF => single("stc".into()),
+        CCF => single("cmc".into()),
 
         LD_r_r(r1, r2) => {
             single(format!("mov {:#?}, {:#?}", g8(r1), g8(r2)))
@@ -246,12 +259,10 @@ pub fn transpile_instr_preserve_c_flag(
                 // (CP, RegOrNum::Num(d8)) => asm.cmp(a, d8 as u32)?,
             }
         }
-        RET_c(c) => {
-            use sm83::Condition::*;
-            // let mut _after_ret = asm.create_label();
+        RET_c(_) => {
             todo!(); // how tf do we return?!
-                     // asm.ret()?;
-                     // asm.set_label(&mut after_ret)?
+                     // need a bigger rework for this...
+                     // option 1 would be returning to the runtime
         }
         LDH_pa8_A(a8) => {
             vec![Amd64Instr::new(format!(
@@ -336,7 +347,7 @@ pub fn transpile_instr_preserve_c_flag(
             todo!() // how do we return ffs
         }
         JP_HL => {
-            // how do we do jumps?
+            // how do we do jumps to unknown locations?
             todo!()
         }
         LD_SP_HL => {
@@ -386,29 +397,52 @@ pub fn transpile_instr_preserve_c_flag(
                 SRL => bit_op("shr", r1),
 
                 BIT(_u3) => {
-                    // this requires actually preserving carry
-                    // something with bt?
-                    todo!()
+                    todo!();
+                    //      Z       Set if the selected bit is 0.
+                    //      C       Preserved.
+
+                    [
+                        // save carry in lowest bit of F
+                        format!("rcl {:#?}, 1", g8(F)),
+                        // test with test; bt uses carry instead of zero
+                        format!("test {:#?}, {}", r1, 1 << _u3),
+                        // now zf set if bit was 0. restore cf.
+                        format!("btr {:#?}, {_u3}", g8(F)),
+                        // WHAT ABOUT THE LEFT DRIFT HUH
+                    ]
+                    .map(Amd64Instr::new)
+                    .into()
                 }
-                RES(_u3) => {
-                    // how do I set a bit without changing the carry?
-                    todo!()
+                RES(u3) => {
+                    [
+                        // save carry in lowest bit of F
+                        format!("rcl {:#?}, 1", g8(F)),
+                        // reset the bit
+                        format!("and {:#?}, {}", r1, !(1u8 << u3)),
+                        // restore cf.
+                        format!("ror {:#?}, 1", g8(F)),
+                    ]
+                    .map(Amd64Instr::new)
+                    .into()
                 }
-                SET(_u3) => {
-                    todo!()
+                SET(u3) => {
+                    [
+                        // save carry in lowest bit of F
+                        format!("rcl {:#?}, 1", g8(F)),
+                        // reset the bit
+                        format!("or {:#?}, {}", r1, 1u8 << u3),
+                        // restore cf.
+                        format!("ror {:#?}, 1", g8(F)),
+                    ]
+                    .map(Amd64Instr::new)
+                    .into()
                 }
             }
         }
-        Invalid => {
-            todo!()
-        }
-        JR_r8(r8) => {
-            return transpile_instr_preserve_c_flag(
-                JP_a16(pc.wrapping_add_signed(r8 as i16)),
-                mem_reg,
-                pc,
-            )
-        }
+        JR_r8(r8) => single(format!(
+            "jmp .sm83_{:02x}",
+            pc.wrapping_add_signed(r8 as i16)
+        )),
         JR_c_r8(c, r8) => {
             return transpile_instr_preserve_c_flag(
                 JP_c_a16(c, pc.wrapping_add_signed(r8 as i16)),
@@ -417,10 +451,7 @@ pub fn transpile_instr_preserve_c_flag(
             )
         }
 
-        JP_a16(a16) => {
-            // how tf do we jump?!
-            single(format!("jmp .sm83_{a16:02x}"))
-        }
+        JP_a16(a16) => single(format!("jmp .sm83_{a16:02x}")),
         JP_c_a16(c, a16) => {
             let op: &str = transpile_cond_jump(c);
             single(format!("{op} .sm83_{a16:02x}"))
@@ -428,20 +459,21 @@ pub fn transpile_instr_preserve_c_flag(
         CALL_c_a16(c, a16) => {
             // skip call if condition does not hold
             let op: &str = transpile_cond_jump(c.not());
-            let cond_jump =
-                single(format!("{op} .after_call_{a16:02x}"));
-            let (call_instrs, call_res) =
-                transpile_instr_preserve_c_flag(
-                    CALL_a16(a16),
-                    mem_reg,
-                    pc,
-                );
-
-            cond_jump
-                .into_iter()
-                .chain(call_instrs)
-                .chain(single(format!(".after_call_{a16:02x}"))) // label
-                .collect()
+            [
+                // the cond jump part
+                format!("{op} .after_call_{a16:02x}"),
+                // the call part
+                format!("dec {:#?}", g16(SP)), // need to wrap at 1<<16
+                format!("dec {:#?}", g16(SP)), // so cant lea
+                // push the address of next instruction, 3 bytes from here
+                // the jump part
+                format!("mov WORD PTR [{:#?}], {:#?}", g64(SP), pc + 3),
+                format!("jmp .sm83_{a16:02x}"),
+                // label for skipping
+                format!(".after_call_{a16:02x}:"),
+            ]
+            .map(Amd64Instr::new)
+            .into()
         }
         CALL_a16(a16) => {
             [
