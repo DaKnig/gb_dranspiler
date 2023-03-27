@@ -1,18 +1,18 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 
-use iced_x86::code_asm::{
-    byte_ptr, get_gpr16, get_gpr8, word_ptr, AsmRegister64,
-    CodeAssembler,
-};
-use iced_x86::IcedError;
+// use iced_x86::code_asm::{
+//     byte_ptr, get_gpr16, get_gpr8, word_ptr, AsmRegister64,
+//     CodeAssembler,
+// };
+// use iced_x86::IcedError;
 
 use crate::sm83;
 //use crate::sm83::*;
 
 use super::mapping::{g16, g64, g8};
 
-type Amd64 = iced_x86::Register;
+// type Amd64 = iced_x86::Register;
 
 // enum TranspileResult {
 //     Success,
@@ -41,7 +41,6 @@ impl Amd64Instr {
 
 pub enum TranspileInstrRes {
     Ok,
-    Invalid,
     Branch {
         // condition for jump
         cond: sm83::Condition,
@@ -54,6 +53,10 @@ pub enum TranspileInstrRes {
     Jump {
         dest: u16,
         to_patch: usize,
+    },
+    Lockup {
+        // that's for stop, halt, invalid instructions
+        pc: u16,
     },
 }
 
@@ -75,12 +78,14 @@ pub fn transpile_instr_preserve_c_flag(
             dest: pc.wrapping_add_signed(r8 as i16),
             to_patch: todo!(),
         },
-        Invalid => TranspileInstrRes::Invalid,
+        Invalid | HALT | STOP(_) => TranspileInstrRes::Lockup {
+	    pc
+	},
         _ => TranspileInstrRes::Ok,
     };
 
     let instrs = match instr {
-        DI | EI | NOP => vec![],
+        DI | EI | NOP => vec![], // basically nops
         LD_pa16_SP(addr) => {
             single(format!(
                 "mov  WORD PTR [{mem_reg} + {:#?}], {:#?}",
@@ -89,7 +94,7 @@ pub fn transpile_instr_preserve_c_flag(
             ))
             // asm.mov(word_ptr(mem_reg + addr as u32), g16(SP))?
         }
-        STOP(_) => todo!(),
+        Invalid | HALT | STOP(_) => vec![], // but the result is a Lockup
 
         LD_rr_d16(rr, d16) => {
             single(format!("mov {:#?}, {d16}", g16(rr)))

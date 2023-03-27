@@ -42,7 +42,6 @@ impl CodeBlock {
         // we are patching the instr in the context of the whole
         // block...
         match res {
-            Invalid => todo!(),
             Branch {
                 cond: _,
                 dest,
@@ -56,6 +55,7 @@ impl CodeBlock {
                 index: to_patch + self.out_instrs.len(),
                 sm83_addr: dest,
             }),
+            Lockup { pc: _ } => todo!(),
             Ok => {}
         };
         //        self.patches.push(Amd64Patch {});
